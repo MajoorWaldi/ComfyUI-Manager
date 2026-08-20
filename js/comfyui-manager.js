@@ -18,6 +18,7 @@ import {
 } from "./common.js";
 import { ComponentBuilderDialog, getPureName, load_components, set_component_policy } from "./components-manager.js";
 import { CustomNodesManager } from "./custom-nodes-manager.js";
+import { NodeUsageAnalyzer } from "./node-usage-analyzer.js";
 import { ModelManager } from "./model-manager.js";
 import { SnapshotManager } from "./snapshot.js";
 import { buildGuiFrame, createSettingsCombo } from "./comfyui-gui-builder.js";
@@ -470,12 +471,12 @@ async function updateComfyUI() {
 
 	set_inprogress_mode();
 
-	const response = await api.fetchApi('/manager/queue/update_comfyui');
+	const response = await api.fetchApi('/manager/queue/update_comfyui', { method: 'POST' });
 
 	showTerminal();
 
 	is_updating = true;
-	await api.fetchApi('/manager/queue/start');
+	await api.fetchApi('/manager/queue/start', { method: 'POST' });
 }
 
 function showVersionSelectorDialog(versions, current, onSelect) {
@@ -625,14 +626,14 @@ async function switchComfyUI() {
 		showVersionSelectorDialog(versions, obj.current, async (selected_version) => {
 			if(selected_version == 'nightly') {
 				update_policy_combo.value = 'nightly-comfyui';
-				api.fetchApi('/manager/policy/update?value=nightly-comfyui');
+				api.fetchApi('/manager/policy/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'nightly-comfyui' }) });
 			}
 			else {
 				update_policy_combo.value = 'stable-comfyui';
-				api.fetchApi('/manager/policy/update?value=stable-comfyui');
+				api.fetchApi('/manager/policy/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'stable-comfyui' }) });
 			}
 
-			let response = await api.fetchApi(`/comfyui_manager/comfyui_switch_version?ver=${selected_version}`, { cache: "no-store" });
+			let response = await api.fetchApi('/comfyui_manager/comfyui_switch_version', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ver: selected_version }), cache: "no-store" });
 			if (response.status == 200) {
 				infoToast(`ComfyUI version is switched to ${selected_version}`);
 			}
@@ -769,10 +770,10 @@ async function updateAll(update_comfyui) {
 
 	if(update_comfyui) {
 		update_all_button.innerText = "Updating ComfyUI...";
-		await api.fetchApi('/manager/queue/update_comfyui');
+		await api.fetchApi('/manager/queue/update_comfyui', { method: 'POST' });
 	}
 
-	const response = await api.fetchApi(`/manager/queue/update_all?mode=${mode}`);
+	const response = await api.fetchApi('/manager/queue/update_all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mode }) });
 
 	if (response.status == 403) {
 		await handle403Response(response);
@@ -784,7 +785,7 @@ async function updateAll(update_comfyui) {
 	}
 	else if(response.status == 200) {
 		is_updating = true;
-		await api.fetchApi('/manager/queue/start');
+		await api.fetchApi('/manager/queue/start', { method: 'POST' });
 	}
 }
 
@@ -813,7 +814,7 @@ function restartOrStop() {
 		rebootAPI();
 	}
 	else {
-		api.fetchApi('/manager/queue/reset');
+		api.fetchApi('/manager/queue/reset', { method: 'POST' });
 		infoToast('Cancel', 'Remaining tasks will stop after completing the current task.');
 	}
 }
@@ -909,6 +910,17 @@ class ManagerMenuDialog extends ComfyDialog {
 							CustomNodesManager.instance.show(CustomNodesManager.ShowMode.IN_WORKFLOW);
 						}
 				}),
+				$el("button.cm-button", {
+					type: "button",
+					textContent: "Node Usage Analyzer",
+					onclick:
+						() => {
+							if(!NodeUsageAnalyzer.instance) {
+								NodeUsageAnalyzer.instance = new NodeUsageAnalyzer(app, self);
+							}
+							NodeUsageAnalyzer.instance.show(NodeUsageAnalyzer.SortMode.BY_PACKAGE);
+						}
+				}),
 				
 				$el("div", {}, []),
 				$el("button.p-button.p-component.cm-button", {
@@ -967,7 +979,7 @@ class ManagerMenuDialog extends ComfyDialog {
 			.then(data => { this.datasrc_combo.value = data; });
 
 		this.datasrc_combo.addEventListener('change', function (event) {
-			api.fetchApi(`/manager/db_mode?value=${event.target.value}`);
+			api.fetchApi('/manager/db_mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: event.target.value }) });
 		});
 
 		const dbRetrievalSetttingItem = createSettingsCombo("DB", this.datasrc_combo);
@@ -1043,7 +1055,7 @@ class ManagerMenuDialog extends ComfyDialog {
 			}
 
 			// Normal operation
-			api.fetchApi(`/manager/preview_method?value=${event.target.value}`)
+			api.fetchApi('/manager/preview_method', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: event.target.value }) })
 				.then(response => {
 					if (response.status === 403) {
 						// Feature transitioned to native
@@ -1087,7 +1099,7 @@ class ManagerMenuDialog extends ComfyDialog {
 					}
 
 					channel_combo.addEventListener('change', function (event) {
-						api.fetchApi(`/manager/channel_url_list?value=${event.target.value}`);
+						api.fetchApi('/manager/channel_url_list', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: event.target.value }) });
 					});
 
 					channel_combo.value = data.selected;
@@ -1152,7 +1164,7 @@ class ManagerMenuDialog extends ComfyDialog {
 			});
 
 		component_policy_combo.addEventListener('change', function (event) {
-			api.fetchApi(`/manager/policy/component?value=${event.target.value}`);
+			api.fetchApi('/manager/policy/component', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: event.target.value }) });
 			set_component_policy(event.target.value);
 		});
 
@@ -1171,7 +1183,7 @@ class ManagerMenuDialog extends ComfyDialog {
 			});
 
 		update_policy_combo.addEventListener('change', function (event) {
-			api.fetchApi(`/manager/policy/update?value=${event.target.value}`);
+			api.fetchApi('/manager/policy/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: event.target.value }) });
 		});
 
 		const updateSetttingItem = createSettingsCombo("Update", update_policy_combo);

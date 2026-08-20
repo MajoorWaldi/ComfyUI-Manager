@@ -8,7 +8,7 @@ import {
 	fetchData, md5, icons, show_message, customConfirm, customAlert, customPrompt,
 	sanitizeHTML, infoToast, showTerminal, setNeedRestart,
 	storeColumnWidth, restoreColumnWidth, getTimeAgo, copyText, loadCss,
-	showPopover, hidePopover, handle403Response
+	showPopover, hidePopover, getWorkflowNodeTypes, findPackageByCnrId, analyzeWorkflowUsage, createFlyover
 } from  "./common.js";
 
 // https://cenfun.github.io/turbogrid/api.html
@@ -42,6 +42,8 @@ const ShowMode = {
 	FAVORITES: "Favorites",
 	ALTERNATIVES: "Alternatives",
 	IN_WORKFLOW: "In Workflow",
+	USED_IN_ANY_WORKFLOW: "Used In Any Workflow",
+	NOT_USED_IN_ANY_WORKFLOW: "Installed and Unused",
 };
 
 export class CustomNodesManager {
@@ -272,6 +274,14 @@ export class CustomNodesManager {
 			value: ShowMode.IN_WORKFLOW,
 			hasData: false
 		}, {
+			label: "Used In Any Workflow",
+			value: ShowMode.USED_IN_ANY_WORKFLOW,
+			hasData: false
+		}, {
+			label: "Installed and Unused",
+			value: ShowMode.NOT_USED_IN_ANY_WORKFLOW,
+			hasData: false
+		}, {
 			label: "Missing",
 			value: ShowMode.MISSING,
 			hasData: false
@@ -462,7 +472,7 @@ export class CustomNodesManager {
 
 			".cn-manager-stop": {
 				click: () => {
-					api.fetchApi('/manager/queue/reset');
+					api.fetchApi('/manager/queue/reset', { method: 'POST' });
 					infoToast('Cancel', 'Remaining tasks will stop after completing the current task.');
 				}
 			},
@@ -521,7 +531,11 @@ export class CustomNodesManager {
 		const grid = new TG.Grid(container);
 		this.grid = grid;
 
-		this.flyover = this.createFlyover(container);
+		this.flyover = createFlyover(container, {
+			enableHover: true,
+			hoverHandler: this.handleFlyoverHover.bind(this),
+			context: this
+		});
 		
 		let prevViewRowsLength = -1;
 		grid.bind('onUpdated', (e, d) => {
@@ -791,7 +805,7 @@ export class CustomNodesManager {
 			classMap: "cn-pack-author", 
 			formatter: (author, rowItem, columnItem) => {
 				if (rowItem.trust) {
-					return `<span tooltip="This author has been active for more than six months in GitHub">✅ ${author}</span>`;
+					return `<span title="This author has been active for more than six months in GitHub">✅ ${author}</span>`;
 				}
 				return author;
 			}
@@ -822,7 +836,7 @@ export class CustomNodesManager {
 				}
 				const ago = getTimeAgo(last_update);
 				const short = `${last_update}`.split(' ')[0];
-				return `<span tooltip="${ago}">${short}</span>`;
+				return `<span title="${ago}">${short}</span>`;
 			}
 		}];
 
@@ -1063,143 +1077,63 @@ export class CustomNodesManager {
 		hidePopover();
 	}
 
-	createFlyover(container) {
-		const $flyover = document.createElement("div");
-		$flyover.className = "cn-flyover";
-		$flyover.innerHTML = `<div class="cn-flyover-header">
-			<div class="cn-flyover-close">${icons.arrowRight}</div>
-			<div class="cn-flyover-title"></div>
-			<div class="cn-flyover-close">${icons.close}</div>
-			</div>
-			<div class="cn-flyover-body"></div>`
-		container.appendChild($flyover);
-
-		const $flyoverTitle = $flyover.querySelector(".cn-flyover-title");
-		const $flyoverBody = $flyover.querySelector(".cn-flyover-body");
-		
-		let width = '50%';
-		let visible = false;
-
-		let timeHide;
-		const closeHandler = (e) => {
-            if ($flyover === e.target || $flyover.contains(e.target)) {
-                return;
-            }
-			clearTimeout(timeHide);
-			timeHide = setTimeout(() => {
-				flyover.hide();
-			}, 100);
-		}
-
-		const hoverHandler = (e) => {
-			if(e.type === "mouseenter") {
-				if(e.target.classList.contains("cn-nodes-name")) {
-					this.showNodePreview(e.target);
-				}
-				return;
-			}
-			this.hideNodePreview();
-		}
-
-		const displayHandler = () => {
-			if (visible) {
-				$flyover.classList.remove("cn-slide-in-right");
-			} else {
-				$flyover.classList.remove("cn-slide-out-right");
-				$flyover.style.width = '0px';
-				$flyover.style.display = "none";
-			}
-		}
-
-		const flyover = {
-			show: (titleHtml, bodyHtml) => {
-				clearTimeout(timeHide);
-				this.element.removeEventListener("click", closeHandler);
-				$flyoverTitle.innerHTML = titleHtml;
-				$flyoverBody.innerHTML = bodyHtml;
-				$flyover.style.display = "block";
-				$flyover.style.width = width;
-				if(!visible) {
-					$flyover.classList.add("cn-slide-in-right");
-				}
-				visible = true;
-				setTimeout(() => {
-					this.element.addEventListener("click", closeHandler);
-				}, 100);
-			},
-			hide: (now) => {
-				visible = false;
-				this.element.removeEventListener("click", closeHandler);
-				if(now) {
-					displayHandler();
-					return;
-				}
-				$flyover.classList.add("cn-slide-out-right");
-			}
-		}
-
-		$flyover.addEventListener("animationend", (e) => {
-			displayHandler();
-		});
-
-		$flyover.addEventListener("mouseenter", hoverHandler, true);
-		$flyover.addEventListener("mouseleave", hoverHandler, true);
-
-		$flyover.addEventListener("click", (e) => {
-
+	handleFlyoverHover(e) {
+		if(e.type === "mouseenter") {
 			if(e.target.classList.contains("cn-nodes-name")) {
-				const nodeName = e.target.innerText;
-				const nodeItem = this.nodeMap[nodeName];
-				if (!nodeItem) {
-					copyText(nodeName).then((res) => {
-						if (res) {
-							e.target.setAttribute("action", "Copied");
-							e.target.classList.add("action");
-							setTimeout(() => {
-								e.target.classList.remove("action");
-								e.target.removeAttribute("action");
-							}, 1000);
-						}
-					});
-					return;
-				}
+				this.showNodePreview(e.target);
+			}
+			return;
+		}
+		this.hideNodePreview();
+	}
 
-				const [x, y, w, h] = app.canvas.ds.visible_area;
-				const dpi = Math.max(window.devicePixelRatio ?? 1, 1);
-				const node = window.LiteGraph?.createNode(
-					nodeItem.name,
-					nodeItem.display_name,
-					{
-						pos: [x + (w-300) / dpi / 2, y]
+	handleFlyoverClick(e) {
+		if(e.target.classList.contains("cn-nodes-name")) {
+			const nodeName = e.target.innerText;
+			const nodeItem = this.nodeMap[nodeName];
+			if (!nodeItem) {
+				copyText(nodeName).then((res) => {
+					if (res) {
+						e.target.setAttribute("action", "Copied");
+						e.target.classList.add("action");
+						setTimeout(() => {
+							e.target.classList.remove("action");
+							e.target.removeAttribute("action");
+						}, 1000);
 					}
-				);
-				if (node) {
-					app.graph.add(node);
-					e.target.setAttribute("action", "Added to Workflow");
-					e.target.classList.add("action");
-					setTimeout(() => {
-						e.target.classList.remove("action");
-						e.target.removeAttribute("action");
-					}, 1000);
-				}
-				
+				});
 				return;
 			}
-			if(e.target.classList.contains("cn-nodes-pack")) {
-				const hash = e.target.getAttribute("hash");
-				const rowItem = this.grid.getRowItemBy("hash", hash);
-				//console.log(rowItem);
-				this.grid.scrollToRow(rowItem);
-				this.addHighlight(rowItem);
-				return;
-			}
-			if(e.target.classList.contains("cn-flyover-close")) {
-				flyover.hide();
-				return;
-			}
-		});
 
-		return flyover;
+			const [x, y, w, h] = app.canvas.ds.visible_area;
+			const dpi = Math.max(window.devicePixelRatio ?? 1, 1);
+			const node = window.LiteGraph?.createNode(
+				nodeItem.name,
+				nodeItem.display_name,
+				{
+					pos: [x + (w-300) / dpi / 2, y]
+				}
+			);
+			if (node) {
+				app.graph.add(node);
+				e.target.setAttribute("action", "Added to Workflow");
+				e.target.classList.add("action");
+				setTimeout(() => {
+					e.target.classList.remove("action");
+					e.target.removeAttribute("action");
+				}, 1000);
+			}
+			
+			return;
+		}
+		if(e.target.classList.contains("cn-nodes-pack")) {
+			const hash = e.target.getAttribute("hash");
+			const rowItem = this.grid.getRowItemBy("hash", hash);
+				//console.log(rowItem);
+			this.grid.scrollToRow(rowItem);
+			this.addHighlight(rowItem);
+			return;
+		}
 	}
 
 	showNodes(d) {
@@ -1476,9 +1410,15 @@ export class CustomNodesManager {
 		let needRestart = false;
 		let errorMsg = "";
 
-		await api.fetchApi('/manager/queue/reset');
+		await api.fetchApi('/manager/queue/reset', { method: 'POST' });
 
+		// Set install_context BEFORE per-item queue enqueue calls so that any
+		// server-side synchronous completion (e.g., sync enable of an inactive
+		// node) that emits cm-queue-status before we return here still finds
+		// install_context populated in onQueueCompleted. target_items is shared
+		// by reference so further pushes below remain visible.
 		let target_items = [];
+		this.install_context = {btn: btn, targets: target_items};
 
 		for (const hash of list) {
 			const item = this.grid.getRowItemBy("hash", hash);
@@ -1527,7 +1467,7 @@ export class CustomNodesManager {
 			});
 
 			if (res.status != 200) {
-				errorMsg = `'${item.title}': `;
+				errorMsg = `'${sanitizeHTML(String(item.title))}': `;
 
 				if(res.status == 403) {
 					try {
@@ -1540,17 +1480,13 @@ export class CustomNodesManager {
 					} catch {
 						errorMsg += `This action is not allowed with this security level configuration.\n`;
 					}
-				} else if(res.status == 404) {
-					errorMsg += `With the current security level configuration, only custom nodes from the <B>"default channel"</B> can be installed.\n`;
 				} else {
-					errorMsg += await res.text() + '\n';
+					errorMsg += sanitizeHTML(await res.text()) + '\n';
 				}
 
 				break;
 			}
 		}
-
-		this.install_context = {btn: btn, targets: target_items};
 
 		if(errorMsg) {
 			this.showError(errorMsg);
@@ -1563,7 +1499,7 @@ export class CustomNodesManager {
 			}
 		}
 		else {
-			await api.fetchApi('/manager/queue/start');
+			await api.fetchApi('/manager/queue/start', { method: 'POST' });
 			this.showStop();
 			showTerminal();
 		}
@@ -1576,6 +1512,10 @@ export class CustomNodesManager {
 
 			const item = self.grid.getRowItemBy("hash", hash);
 
+			if (!item) {
+				return;
+			}
+
 			item.restart = true;
 			self.restartMap[item.hash] = true;
 			self.grid.updateCell(item, "action");
@@ -1583,45 +1523,81 @@ export class CustomNodesManager {
 		}
 		else if(event.detail.status == 'done') {
 			self.hideStop();
-			self.onQueueCompleted(event.detail);
+			// Await + error logging so any unhandled rejection surfaces to the
+			// console instead of silently swallowing completion finalization
+			// (root cause of disable/enable button staying loading with no toast).
+			try {
+				await self.onQueueCompleted(event.detail);
+			} catch (e) {
+				console.error("[ComfyUI-Manager] onQueueCompleted failed:", e);
+			}
 		}
 	}
 
 	async onQueueCompleted(info) {
+		// `nodepack_result` is a dict serialized from a Python dict, not an array.
+		// `dict.length` is `undefined` and `undefined == 0` is `false`, so the
+		// previous `result.length == 0` guard was a no-op; switch to a correct
+		// empty-check that also tolerates null/undefined.
 		let result = info.nodepack_result;
 
-		if(result.length == 0) {
+		if (!result || Object.keys(result).length === 0) {
 			return;
 		}
 
 		let self = CustomNodesManager.instance;
 
-		if(!self.install_context) {
+		if (!self || !self.install_context) {
 			return;
 		}
 
 		const { target, label, mode } = self.install_context.btn;
-		target.classList.remove("cn-btn-loading");
+		const targets = self.install_context.targets || [];
 
+		// Compute errorMsg upfront so the downstream user-visible finalization
+		// (showRestart / showMessage / infoToast) fires regardless of whether
+		// any DOM-touching step below throws.
 		let errorMsg = "";
-
-		for(let hash in result){
+		for (let hash in result) {
 			let v = result[hash];
-
-			if(v != 'success' && v != 'skip')
-				errorMsg += v+'\n';
+			if (v != 'success' && v != 'skip') {
+				errorMsg += v + '\n';
+			}
 		}
 
-		for(let k in self.install_context.targets) {
-			let item = self.install_context.targets[k];
-			self.grid.updateCell(item, "action");
+		// Defensive: `target` may be a detached DOM node (the in_progress
+		// handler's updateCell can re-render the row and replace the button
+		// element). classList.remove on a detached node is a no-op, but we
+		// still guard in case target was torn down entirely.
+		try {
+			if (target && target.classList) {
+				target.classList.remove("cn-btn-loading");
+			}
+		} catch (e) {
+			console.warn("[ComfyUI-Manager] Failed to clear button loading state:", e);
+		}
+
+		// Defensive: grid.updateCell can throw if the item was removed or the
+		// grid was re-rendered between in_progress and done. Do NOT let this
+		// loop abort the completion finalization below — that was the observed
+		// failure mode for disable/enable (no toast, no "restart required"
+		// message).
+		try {
+			for (let k in targets) {
+				let item = targets[k];
+				if (item) {
+					self.grid.updateCell(item, "action");
+				}
+			}
+		} catch (e) {
+			console.warn("[ComfyUI-Manager] Failed to refresh target cells after queue completion:", e);
 		}
 
 		if (errorMsg) {
 			self.showError(errorMsg);
-			show_message("Installation Error:\n"+errorMsg);
+			show_message("Installation Error:\n" + errorMsg);
 		} else {
-			self.showStatus(`${label} ${result.length} custom node(s) successfully`);
+			self.showStatus(`${label} ${Object.keys(result).length} custom node(s) successfully`);
 		}
 
 		self.showRestart();
@@ -1874,7 +1850,10 @@ export class CustomNodesManager {
 		for(let k in allUsedNodes) {
 			var item;
 			if(allUsedNodes[k].properties.cnr_id) {
-				item = this.custom_nodes[allUsedNodes[k].properties.cnr_id];
+				const foundPackage = findPackageByCnrId(allUsedNodes[k].properties.cnr_id, this.custom_nodes, false);
+				if (foundPackage) {
+					item = foundPackage.pack;
+				}
 			}
 			else if(allUsedNodes[k].properties.aux_id) {
 				item = aux_id_to_pack[allUsedNodes[k].properties.aux_id];
@@ -1919,6 +1898,48 @@ export class CustomNodesManager {
 		}
 	
 		return hashMap;
+	}
+
+	async getUsedInAnyWorkflow() {
+		this.showStatus(`Loading workflow usage analysis ...`);
+		
+		const result = await analyzeWorkflowUsage(this.custom_nodes);
+		
+		if (!result.success) {
+			this.showError(`Failed to get workflow data: ${result.error}`);
+			return {};
+		}
+		
+		const hashMap = {};
+		
+		// Convert usage map keys to hash map
+		result.usageMap.forEach((count, packageKey) => {
+			const pack = this.custom_nodes[packageKey];
+			if (pack && pack.hash) {
+				hashMap[pack.hash] = true;
+			}
+		});
+		
+		return hashMap;
+	}
+
+	async getNotUsedInAnyWorkflow() {
+		this.showStatus(`Loading workflow usage analysis ...`);
+		
+		// Get the used packages first using common utility
+		const usedHashMap = await this.getUsedInAnyWorkflow();
+		const notUsedHashMap = {};
+		
+		// Find all installed packages that are NOT in the used list
+		for(let k in this.custom_nodes) {
+			let nodepack = this.custom_nodes[k];
+			// Only consider installed packages
+			if (nodepack.state !== "not-installed" && !usedHashMap[nodepack.hash]) {
+				notUsedHashMap[nodepack.hash] = true;
+			}
+		}
+		
+		return notUsedHashMap;
 	}
 
 	async loadData(show_mode = ShowMode.NORMAL) {
@@ -1990,6 +2011,10 @@ export class CustomNodesManager {
 				hashMap = await this.getFavorites();
 			} else if(this.show_mode == ShowMode.IN_WORKFLOW) {
 				hashMap = await this.getNodepackInWorkflow();
+			} else if(this.show_mode == ShowMode.USED_IN_ANY_WORKFLOW) {
+				hashMap = await this.getUsedInAnyWorkflow();
+			} else if(this.show_mode == ShowMode.NOT_USED_IN_ANY_WORKFLOW) {
+				hashMap = await this.getNotUsedInAnyWorkflow();
 			}
 			filterItem.hashMap = hashMap;
 
